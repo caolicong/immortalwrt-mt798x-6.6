@@ -1,9 +1,9 @@
 # ============================================================
-# AX3000T V2 固件编译工作流
+# AX3000T V2 固件编译工作流（stock 变体，配合 hanwckf 112M U-Boot）
 # 在 fork 仓库中将此内容粘贴到 .github/workflows/manual.yml
 # 然后在 Actions 页面手动触发 "Run workflow"
 # ============================================================
-name: Build AX3000T V2 Firmware
+name: Build AX3000T Firmware (stock)
 
 on:
   workflow_dispatch:
@@ -18,12 +18,12 @@ on:
           - 'true'
 
 env:
-  # 只编译 AX3000T ubootmod 这一个设备目标
+  # 只编译 AX3000T stock 这一个设备目标（标准 layout，配合 hanwckf 112M U-Boot）
   DEFCONFIG_FILE: defconfig/mt7981-ax3000.config
 
 jobs:
   build:
-    name: Compile AX3000T V2 (ubootmod)
+    name: Compile AX3000T (stock)
     runs-on: ubuntu-latest
     timeout-minutes: 240
 
@@ -92,10 +92,10 @@ jobs:
         run: |
           echo "=== 编译产物 ==="
           find bin/targets/mediatek/filogic/ -type f \( -name "*ax3000t*" -o -name "*manifest*" -o -name "sha256sums" \) -exec ls -lh {} \;
-          # 确认至少有一个 ax3000t ubootmod 的固件文件
-          FOUND=$(find bin/targets/mediatek/filogic/ -type f \( -name "*ax3000t*ubootmod*.bin" -o -name "*ax3000t*ubootmod*.img" \))
+          # 确认至少有一个 ax3000t stock 变体的固件文件
+          FOUND=$(find bin/targets/mediatek/filogic/ -type f -name "*xiaomi_mi-router-ax3000t-squashfs-*.bin")
           if [ -z "$FOUND" ]; then
-            echo "错误：未找到 AX3000T ubootmod 固件文件！编译可能未真正生成镜像。"
+            echo "错误：未找到 AX3000T stock 固件文件！编译可能未真正生成镜像。"
             exit 1
           fi
           echo "找到固件："
@@ -104,13 +104,9 @@ jobs:
       - name: Prepare artifacts
         run: |
           mkdir -p firmware
-          # ubootmod 变体的核心产物
-          cp bin/targets/mediatek/filogic/*xiaomi*mi-router-ax3000t-ubootmod* firmware/ 2>/dev/null || true
-          # sysupgrade / recovery / preloader / bl31-uboot
-          cp bin/targets/mediatek/filogic/*ax3000t*ubootmod*sysupgrade* firmware/ 2>/dev/null || true
-          cp bin/targets/mediatek/filogic/*ax3000t*ubootmod*recovery* firmware/ 2>/dev/null || true
-          cp bin/targets/mediatek/filogic/*ax3000t*ubootmod*preloader* firmware/ 2>/dev/null || true
-          cp bin/targets/mediatek/filogic/*ax3000t*ubootmod*fip* firmware/ 2>/dev/null || true
+          # stock 变体产物：factory.bin（首次刷入用）+ sysupgrade.bin（升级用）
+          cp bin/targets/mediatek/filogic/*xiaomi_mi-router-ax3000t-squashfs-factory.bin firmware/ 2>/dev/null || true
+          cp bin/targets/mediatek/filogic/*xiaomi_mi-router-ax3000t-squashfs-sysupgrade.bin firmware/ 2>/dev/null || true
           # 清单和校验
           cp bin/targets/mediatek/filogic/sha256sums firmware/ 2>/dev/null || true
           cp bin/targets/mediatek/filogic/*.manifest firmware/ 2>/dev/null || true
@@ -119,7 +115,7 @@ jobs:
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ax3000t-v2-ubootmod-firmware
+          name: ax3000t-stock-firmware
           path: firmware/
           retention-days: 30
 
@@ -127,6 +123,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ax3000t-v2-bin-debug
+          name: ax3000t-stock-bin-debug
           path: bin/
           retention-days: 7
