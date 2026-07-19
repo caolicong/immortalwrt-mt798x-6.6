@@ -79,8 +79,19 @@ jobs:
 
       - name: Download sources
         run: |
-          make download -j$(nproc)
-        timeout-minutes: 30
+          # 下载策略：三轮重试，避开单一包卡死整批超时
+          # 第一轮：并行快速下载大部分源码包（卡住的会失败但不中断）
+          echo "=== 第一轮：并行下载 ==="
+          make download -j$(nproc) || true
+          
+          # 第二轮：单线程 VERBOSE 重试失败的包，显示具体卡住的 URL 方便排查
+          echo "=== 第二轮：单线程 VERBOSE 重试 ==="
+          make download -j1 V=s || true
+          
+          # 第三轮：最终确认。若仍有源码包下载失败则报错退出
+          echo "=== 第三轮：最终确认 ==="
+          make download -j$(nproc) V=s
+        timeout-minutes: 60
 
       - name: Compile firmware
         run: |
