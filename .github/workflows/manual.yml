@@ -1,163 +1,119 @@
-name: Build AX3000T Firmware
-
-permissions:
-  contents: write
+# ============================================================
+# AX3000T V2 固件编译工作流
+# 在 fork 仓库中将此内容粘贴到 .github/workflows/manual.yml
+# 然后在 Actions 页面手动触发 "Run workflow"
+# ============================================================
+name: Build AX3000T V2 Firmware
 
 on:
   workflow_dispatch:
     inputs:
-      config:
-        description: '选择配置文件'
-        required: true
-        type: choice
-        default: 'mt7981-ax3000.config'
-        options:
-          - 'mt7981-ax3000.config'
-          - 'mt7981-ax3000_dae.config'
-      release:
-        description: '是否发布到 Release'
+      clean_cache:
+        description: '清理 ccache 缓存强制全量编译'
         required: false
-        type: boolean
-        default: true
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 env:
-  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6
-  REPO_BRANCH: openwrt-24.10-6.6
-  CONFIG_FILE: ${{ github.event.inputs.config }}
-  TZ: Asia/Shanghai
+  # 只编译 AX3000T ubootmod 这一个设备目标
+  DEFCONFIG_FILE: defconfig/mt7981-ax3000.config
 
 jobs:
   build:
-    name: 🔨 Build AX3000T
-    runs-on: ubuntu-22.04
+    name: Compile AX3000T V2 (ubootmod)
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
 
     steps:
-      - name: 🙌 Checkout
+      - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: 🪠 Free Disk Space
-        uses: jlumbroso/free-disk-space@main
         with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+          fetch-depth: 0
 
-      - name: 🛠️ Init Environment
+      - name: Free disk space
         run: |
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install -y ack antlr3 asciidoc autoconf automake autopoint \
-            binutils bison build-essential bzip2 ccache clang cmake cpio curl \
-            device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib \
-            git gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev \
-            libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev \
-            libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev \
-            lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf \
-            python3 python3-pip python3-ply python3-docutils python3-pyelftools \
-            qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs \
-            upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
-          sudo timedatectl set-timezone "$TZ"
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
+          echo "=== 释放磁盘空间 ==="
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          sudo apt-get clean
+          df -h /
 
-      - name: 🪜 Clone source code
-        working-directory: /workdir
+      - name: Setup build dependencies
         run: |
-          git clone $REPO_URL -b $REPO_BRANCH --single-branch --filter=blob:none openwrt
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib \
+            g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-setuptools python3-dev rsync unzip zlib1g-dev \
+            ccache
 
-      - name: ⚙️ Setup ccache & DL cache
+      - name: Cache ccache
+        if: github.event.inputs.clean_cache != 'true'
         uses: actions/cache@v4
         with:
-          path: |
-            /workdir/.ccache
-            /workdir/openwrt/dl
-          key: ${{ runner.os }}-ax3000t-${{ env.REPO_BRANCH }}-${{ env.CONFIG_FILE }}
-          restore-keys: |
-            ${{ runner.os }}-ax3000t-${{ env.REPO_BRANCH }}-
+          path: ~/.ccache
+          key: ccache-ax3000t-v2-${{ github.sha }}
+          restore-keys: ccache-ax3000t-v2-
 
-      - name: 🔧 Configure ccache
+      - name: Update & install feeds
         run: |
-          ccache --set-config=max_size=2G
-          ccache --set-config=cache_dir=/workdir/.ccache
-          ccache --set-config=compression=true
-          ccache -z
-
-      - name: 🧬 Update & Install feeds
-        run: |
-          cd /workdir/openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 🧩 Load config
+      - name: Load defconfig
         run: |
-          cd /workdir/openwrt
-          cp -f defconfig/$CONFIG_FILE .config
+          cp ${{ env.DEFCONFIG_FILE }} .config
           make defconfig
 
-      - name: 📥 Download sources
+      - name: Show enabled device targets
         run: |
-          cd /workdir/openwrt
+          echo "=== 已启用的设备目标 ==="
+          grep -E 'CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_.*=y' .config || echo "（未找到设备目标！）"
+
+      - name: Download sources
+        run: |
           make download -j$(nproc)
+        timeout-minutes: 30
 
-      - name: 🔨 Build Firmware
-        id: compile
+      - name: Compile firmware
         run: |
-          cd /workdir/openwrt
-          if ! make -j$(nproc) CC="ccache gcc" CXX="ccache g++"; then
-            echo "⚠️ Multi-threaded failed, retrying single-threaded..."
-            make -j1 V=s
-          fi
-          echo "status=success" >> $GITHUB_OUTPUT
+          nproc
+          make -j$(nproc) V=s
+        timeout-minutes: 180
 
-      - name: 📦 Collect artifacts
-        if: steps.compile.outputs.status == 'success'
+      - name: List built images
         run: |
-          mkdir -p $GITHUB_WORKSPACE/firmware
-          cd /workdir/openwrt/bin/targets/mediatek/filogic/
-          # 只挑 AX3000T 的固件和 manifest
-          cp -v *xiaomi_mi-router-ax3000t* $GITHUB_WORKSPACE/firmware/ 2>/dev/null || true
-          ls -lh $GITHUB_WORKSPACE/firmware/
+          echo "=== 编译产物 ==="
+          find bin/targets/mediatek/filogic/ -type f \( -name "*ax3000t*" -o -name "*manifest*" -o -name "sha256sums" \) -exec ls -lh {} \;
 
-      - name: 🪄 Upload artifacts
-        if: steps.compile.outputs.status == 'success'
+      - name: Prepare artifacts
+        run: |
+          mkdir -p firmware
+          # ubootmod 变体的核心产物
+          cp bin/targets/mediatek/filogic/*xiaomi*mi-router-ax3000t-ubootmod* firmware/ 2>/dev/null || true
+          # sysupgrade / recovery / preloader / bl31-uboot
+          cp bin/targets/mediatek/filogic/*ax3000t*ubootmod*sysupgrade* firmware/ 2>/dev/null || true
+          cp bin/targets/mediatek/filogic/*ax3000t*ubootmod*recovery* firmware/ 2>/dev/null || true
+          cp bin/targets/mediatek/filogic/*ax3000t*ubootmod*preloader* firmware/ 2>/dev/null || true
+          cp bin/targets/mediatek/filogic/*ax3000t*ubootmod*fip* firmware/ 2>/dev/null || true
+          # 清单和校验
+          cp bin/targets/mediatek/filogic/sha256sums firmware/ 2>/dev/null || true
+          cp bin/targets/mediatek/filogic/*.manifest firmware/ 2>/dev/null || true
+          ls -lh firmware/
+
+      - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AX3000T_${{ env.CONFIG_FILE }}_${{ github.run_id }}
-          path: ${{ github.workspace }}/firmware/*
+          name: ax3000t-v2-ubootmod-firmware
+          path: firmware/
+          retention-days: 30
 
-      - name: 📌 Generate Release Tag
-        id: tag
-        if: steps.compile.outputs.status == 'success' && github.event.inputs.release == 'true'
-        run: |
-          BUILD_TIME=$(date +"%Y%m%d-%H%M")
-          echo "release_tag=AX3000T-${BUILD_TIME}" >> $GITHUB_OUTPUT
-          cat > release.txt << EOF
-          ## AX3000T ImmortalWrt 24.10 (内核 6.6)
-
-          - 配置: $CONFIG_FILE
-          - 分支: $REPO_BRANCH
-          - 编译时间: $(date +"%Y-%m-%d %H:%M:%S")
-
-          ## 文件说明
-          - *sysupgrade.bin: 从已刷 OpenWrt/ImmortalWrt 系统升级用
-          - *factory.bin: 从原厂 uboot 刷入（如果有）
-          - *stock*: 兼容原厂分区版本
-          EOF
-
-      - name: 📤 Upload to Release
-        if: steps.tag.outputs.release_tag != ''
-        uses: softprops/action-gh-release@v2
+      - name: Upload full bin directory (debug)
+        if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ steps.tag.outputs.release_tag }}
-          body_path: release.txt
-          files: ${{ github.workspace }}/firmware/*
-
-      - name: 🚧 Delete old workflow runs
-        uses: Mattraks/delete-workflow-runs@v2
-        with:
-          retain_days: 0
-          keep_minimum_runs: 5
+          name: ax3000t-v2-bin-debug
+          path: bin/
+          retention-days: 7
