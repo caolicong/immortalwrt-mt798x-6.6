@@ -1,0 +1,119 @@
+# ============================================================
+# AX3000T V2 固件编译工作流
+# 在 fork 仓库中将此内容粘贴到 .github/workflows/manual.yml
+# 然后在 Actions 页面手动触发 "Run workflow"
+# ============================================================
+name: Build AX3000T V2 Firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      clean_cache:
+        description: '清理 ccache 缓存强制全量编译'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+env:
+  # 只编译 AX3000T ubootmod 这一个设备目标
+  DEFCONFIG_FILE: defconfig/mt7981-ax3000.config
+
+jobs:
+  build:
+    name: Compile AX3000T V2 (ubootmod)
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Free disk space
+        run: |
+          echo "=== 释放磁盘空间 ==="
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          sudo apt-get clean
+          df -h /
+
+      - name: Setup build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib \
+            g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-setuptools python3-distutils rsync unzip zlib1g-dev \
+            ccache
+
+      - name: Cache ccache
+        if: github.event.inputs.clean_cache != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-ax3000t-v2-${{ github.sha }}
+          restore-keys: ccache-ax3000t-v2-
+
+      - name: Update & install feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Load defconfig
+        run: |
+          cp ${{ env.DEFCONFIG_FILE }} .config
+          make defconfig
+
+      - name: Show enabled device targets
+        run: |
+          echo "=== 已启用的设备目标 ==="
+          grep -E 'CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_.*=y' .config || echo "（未找到设备目标！）"
+
+      - name: Download sources
+        run: |
+          make download -j$(nproc)
+        timeout-minutes: 30
+
+      - name: Compile firmware
+        run: |
+          nproc
+          make -j$(nproc) V=s
+        timeout-minutes: 180
+
+      - name: List built images
+        run: |
+          echo "=== 编译产物 ==="
+          find bin/targets/mediatek/filogic/ -type f \( -name "*ax3000t*" -o -name "*manifest*" -o -name "sha256sums" \) -exec ls -lh {} \;
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p firmware
+          # ubootmod 变体的核心产物
+          cp bin/targets/mediatek/filogic/*xiaomi*mi-router-ax3000t-ubootmod* firmware/ 2>/dev/null || true
+          # sysupgrade / recovery / preloader / bl31-uboot
+          cp bin/targets/mediatek/filogic/*ax3000t*ubootmod*sysupgrade* firmware/ 2>/dev/null || true
+          cp bin/targets/mediatek/filogic/*ax3000t*ubootmod*recovery* firmware/ 2>/dev/null || true
+          cp bin/targets/mediatek/filogic/*ax3000t*ubootmod*preloader* firmware/ 2>/dev/null || true
+          cp bin/targets/mediatek/filogic/*ax3000t*ubootmod*fip* firmware/ 2>/dev/null || true
+          # 清单和校验
+          cp bin/targets/mediatek/filogic/sha256sums firmware/ 2>/dev/null || true
+          cp bin/targets/mediatek/filogic/*.manifest firmware/ 2>/dev/null || true
+          ls -lh firmware/
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ax3000t-v2-ubootmod-firmware
+          path: firmware/
+          retention-days: 30
+
+      - name: Upload full bin directory (debug)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ax3000t-v2-bin-debug
+          path: bin/
+          retention-days: 7
