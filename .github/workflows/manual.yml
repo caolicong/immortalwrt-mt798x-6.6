@@ -70,7 +70,12 @@ jobs:
       - name: Show enabled device targets
         run: |
           echo "=== 已启用的设备目标 ==="
-          grep -E 'CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_.*=y' .config || echo "（未找到设备目标！）"
+          grep -E 'CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_.*=y' .config || {
+            echo "错误：未找到任何设备目标！defconfig 配置有误，subtarget 可能不对。"
+            echo "=== 当前 .config 中所有 TARGET 相关项 ==="
+            grep -E 'CONFIG_TARGET_(mediatek|DEVICE)' .config | head -30
+            exit 1
+          }
 
       - name: Download sources
         run: |
@@ -87,6 +92,14 @@ jobs:
         run: |
           echo "=== 编译产物 ==="
           find bin/targets/mediatek/filogic/ -type f \( -name "*ax3000t*" -o -name "*manifest*" -o -name "sha256sums" \) -exec ls -lh {} \;
+          # 确认至少有一个 ax3000t ubootmod 的固件文件
+          FOUND=$(find bin/targets/mediatek/filogic/ -type f \( -name "*ax3000t*ubootmod*.bin" -o -name "*ax3000t*ubootmod*.img" \))
+          if [ -z "$FOUND" ]; then
+            echo "错误：未找到 AX3000T ubootmod 固件文件！编译可能未真正生成镜像。"
+            exit 1
+          fi
+          echo "找到固件："
+          echo "$FOUND"
 
       - name: Prepare artifacts
         run: |
